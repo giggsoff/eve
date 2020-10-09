@@ -19,7 +19,6 @@ jobs:
       - name: build eden
         run: |
           make clean
-          make build
           make build-tests
       - name: get eve
         uses: actions/checkout@v2
@@ -40,6 +39,7 @@ jobs:
         if: ${{ always() }}
         run: |
           ./eden log --format json > trace.log
+          ./eden stop
       - name: Store raw test results
         if: ${{ always() }}
         uses: actions/upload-artifact@v2
