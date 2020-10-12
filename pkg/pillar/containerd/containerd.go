@@ -544,14 +544,13 @@ func (client *Client) CtrStopContainer(ctx context.Context, containerID string, 
 		return err
 	}
 
-	// it is unclear whether we have to wait after this or proceed
-	// straight away. It is also unclear whether paying any attention
-	// to the err returned is worth anything at this point
-	_ = task.Kill(ctx, signal, containerd.WithKillAll)
-
 	if force {
 		_, err = task.Delete(ctx, containerd.WithProcessKill)
 	} else {
+		// it is unclear whether we have to wait after this or proceed
+		// straight away. It is also unclear whether paying any attention
+		// to the err returned is worth anything at this point
+		_ = task.Kill(ctx, signal, containerd.WithKillAll)
 		_, err = task.Delete(ctx)
 	}
 
