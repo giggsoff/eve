@@ -71,6 +71,9 @@ var zcdevUUID uuid.UUID
 // Really a constant
 var nilUUID uuid.UUID
 
+// current epoch of config
+var epoch int64
+
 func handleConfigInit(networkSendTimeout uint32) *zedcloud.ZedCloudContext {
 
 	// get the server name
@@ -513,7 +516,63 @@ func inhaleDeviceConfig(config *zconfig.EdgeDevConfig, getconfigCtx *getconfigCo
 				ctx := getconfigCtx.zedagentCtx
 				triggerPublishDevInfo(ctx)
 			}
+		}
+		newEpoch := config.GetEpoch()
+		if epoch != newEpoch {
+			log.Functionf("Epoch changed from %d to %d", epoch, newEpoch)
+			epoch = newEpoch
+			ctx := getconfigCtx.zedagentCtx
+			// publish device info
+			triggerPublishDevInfo(ctx)
 
+			// publish applications infos
+			sub := ctx.getconfigCtx.subAppInstanceStatus
+			items := sub.GetAll()
+			for _, c := range items {
+				appStatus := c.(types.AppInstanceStatus)
+				uuidStr := appStatus.Key()
+				PublishAppInfoToZedCloud(ctx, uuidStr, &appStatus, ctx.assignableAdapters,
+					ctx.iteration)
+				ctx.iteration++
+			}
+
+			// publish network instances infos
+			sub = ctx.subNetworkInstanceStatus
+			items = sub.GetAll()
+			for _, c := range items {
+				niStatus := c.(types.NetworkInstanceStatus)
+				prepareAndPublishNetworkInstanceInfoMsg(ctx, niStatus, false)
+			}
+
+			// publish volumes infos
+			sub = ctx.getconfigCtx.subVolumeStatus
+			items = sub.GetAll()
+			for _, c := range items {
+				volumeStatus := c.(types.VolumeStatus)
+				uuidStr := volumeStatus.VolumeID.String()
+				PublishVolumeToZedCloud(ctx, uuidStr, &volumeStatus, ctx.iteration)
+				ctx.iteration++
+			}
+
+			// publish content trees infos
+			sub = ctx.getconfigCtx.subContentTreeStatus
+			items = sub.GetAll()
+			for _, c := range items {
+				ctStatus := c.(types.ContentTreeStatus)
+				uuidStr := ctStatus.Key()
+				PublishContentInfoToZedCloud(ctx, uuidStr, &ctStatus, ctx.iteration)
+				ctx.iteration++
+			}
+
+			// publish blobs infos
+			sub = ctx.subBlobStatus
+			items = sub.GetAll()
+			for _, c := range items {
+				blobStatus := c.(types.BlobStatus)
+				uuidStr := blobStatus.Key()
+				PublishBlobInfoToZedCloud(ctx, uuidStr, &blobStatus, ctx.iteration)
+				ctx.iteration++
+			}
 		}
 	}
 
