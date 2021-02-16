@@ -12,8 +12,8 @@ domID() {
    # shellcheck disable=SC2034
    for _ in 1 2 3; do
      ID=$(xl domid "$1")
+     [ -z "$ID" ] || break # we should return immediately, ID may change over time
      sleep 8
-     [ -z "$ID" ] || break
    done >/dev/null 2>&1
 
    echo "$ID"
@@ -61,8 +61,10 @@ xen_info() {
        r*) handleKnownState running ;;
      # Waiting for 5sec before checking domain status again in order to recover from unknown state
    ------) handleUnknownState; sleep 5 ;;
-        *) handleKnownState broken  ;;
+     # In case of reboot from inside the domain we will have new ID and we need to defer wait for coming back
+        *) if [ "$PREVIOUS_ID" != "${1:- }" ]; then handleUnknownState; else handleKnownState broken; fi ;;
    esac
+   PREVIOUS_ID="${1:- }"
 }
 
 # pre-flight checks
@@ -87,6 +89,7 @@ xl create "$2" -p $EXTRA_ARGS || bail "xl created failed"
 
 # we may need to wait for domain to come online for us to manipulate it (timing out in under 30 sec)
 ID=$(domID "$1")
+PREVIOUS_ID=$ID
 
 # finally unpause the domain
 xl unpause "$ID" || bail "xl unpause failed"
@@ -97,6 +100,7 @@ xl unpause "$ID" || bail "xl unpause failed"
 (while true; do
    xen_info "$(domID "$1")" > "/run/tasks/$1.tmp"
    mv "/run/tasks/$1.tmp" "/run/tasks/$1"
+   sleep 8
 done) &
 
 # and start watching over the console: note that we loop forever
