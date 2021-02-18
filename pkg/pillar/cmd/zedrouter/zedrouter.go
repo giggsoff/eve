@@ -24,6 +24,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/lf-edge/eve/pkg/pillar/agentlog"
 	"github.com/lf-edge/eve/pkg/pillar/base"
+	"github.com/lf-edge/eve/pkg/pillar/cipher"
 	"github.com/lf-edge/eve/pkg/pillar/devicenetwork"
 	"github.com/lf-edge/eve/pkg/pillar/flextimer"
 	"github.com/lf-edge/eve/pkg/pillar/iptables"
@@ -88,6 +89,10 @@ type zedrouterContext struct {
 	appStatsMutex             sync.Mutex // to protect the changing appNetworkStatus & appCollectStatsRunning
 	appStatsInterval          uint32
 	aclog                     *logrus.Logger // App Container logger
+
+	// cipher context
+	pubCipherBlockStatus pubsub.Publication
+	decryptCipherContext cipher.DecryptCipherContext
 }
 
 var debug = false
@@ -292,6 +297,35 @@ func Run(ps *pubsub.PubSub, loggerArg *logrus.Logger, logArg *base.LogObject) in
 	if err != nil {
 		log.Fatal(err)
 	}
+
+	pubCipherBlockStatus, err := ps.NewPublication(
+		pubsub.PublicationOptions{
+			AgentName: agentName,
+			TopicType: types.CipherBlockStatus{},
+		})
+	if err != nil {
+		log.Fatal(err)
+	}
+	zedrouterCtx.pubCipherBlockStatus = pubCipherBlockStatus
+	pubCipherBlockStatus.ClearRestarted()
+
+	// Look for controller certs which will be used for decryption
+	subControllerCert, err := ps.NewSubscription(pubsub.SubscriptionOptions{
+		AgentName:   "zedagent",
+		MyAgentName: agentName,
+		TopicImpl:   types.ControllerCert{},
+		Activate:    false,
+		Ctx:         &zedrouterCtx,
+		WarningTime: warningTime,
+		ErrorTime:   errorTime,
+		Persistent:  true,
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	zedrouterCtx.decryptCipherContext.Log = log
+	zedrouterCtx.decryptCipherContext.SubControllerCert = subControllerCert
+	subControllerCert.Activate()
 
 	// Pick up debug aka log level before we start real work
 	for !zedrouterCtx.GCInitialized {
@@ -2134,4 +2168,48 @@ func addAppInstanceOverlayRoute(
 		log.Functionf("addAppInstaneOverlayRoute done for %s\n",
 			status.DisplayName)
 	}
+}
+
+// getSSHPasswords : returns decrypted SSH passwords
+func getSSHPasswords(ctx *zedrouterContext,
+	dc *types.AppNetworkConfig) ([]string, error) {
+	// TBD: add ssh keys into cypher block
+	return nil, nil
+}
+
+// getCloudInitUserData : returns decrypted cloud-init user data
+func getCloudInitUserData(ctx *zedrouterContext,
+	dc *types.AppNetworkConfig) (string, error) {
+	if dc.CipherBlockStatus.IsCipher {
+		status, decBlock, err := cipher.GetCipherCredentials(&ctx.decryptCipherContext,
+			agentName, dc.CipherBlockStatus)
+		ctx.pubCipherBlockStatus.Publish(status.Key(), status)
+		if err != nil {
+			log.Errorf("%s, appnetwork config cipherblock decryption unsuccessful, falling back to cleartext: %v",
+				dc.Key(), err)
+			decBlock.ProtectedUserData = *dc.CloudInitUserData
+			// We assume IsCipher is only set when there was some
+			// data. Hence this is a fallback if there is
+			// some cleartext.
+			if decBlock.ProtectedUserData != "" {
+				cipher.RecordFailure(agentName,
+					types.CleartextFallback)
+			} else {
+				cipher.RecordFailure(agentName,
+					types.MissingFallback)
+			}
+			return decBlock.ProtectedUserData, nil
+		}
+		log.Functionf("%s, appnetwork config cipherblock decryption successful", dc.Key())
+		return decBlock.ProtectedUserData, nil
+	}
+	log.Functionf("%s, appnetwork config cipherblock not present", dc.Key())
+	decBlock := types.EncryptionBlock{}
+	decBlock.ProtectedUserData = *dc.CloudInitUserData
+	if decBlock.ProtectedUserData != "" {
+		cipher.RecordFailure(agentName, types.NoCipher)
+	} else {
+		cipher.RecordFailure(agentName, types.NoData)
+	}
+	return decBlock.ProtectedUserData, nil
 }

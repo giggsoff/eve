@@ -9,10 +9,12 @@ package zedrouter
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
+	"path"
 	"strconv"
 	"strings"
 
@@ -35,9 +37,24 @@ type hostnameHandler struct {
 	ctx *zedrouterContext
 }
 
+// Provides a meta-data for cloud-init
+type metadataHandler struct {
+	ctx *zedrouterContext
+}
+
+// Provides a user-data for cloud-init
+type userDataHandler struct {
+	ctx *zedrouterContext
+}
+
+// Provides links for OpenStack metadata
+type openstackHandler struct {
+	ctx *zedrouterContext
+}
+
 func createServer4(ctx *zedrouterContext, bridgeIP string, bridgeName string) error {
 	if bridgeIP == "" {
-		err := fmt.Errorf("Can't run server on %s: no bridgeIP", bridgeName)
+		err := fmt.Errorf("can't run server on %s: no bridgeIP", bridgeName)
 		log.Error(err)
 		return err
 	}
@@ -48,6 +65,15 @@ func createServer4(ctx *zedrouterContext, bridgeIP string, bridgeName string) er
 	mux.Handle("/eve/v1/external_ipv4", ipHandler)
 	hostnameHandler := &hostnameHandler{ctx: ctx}
 	mux.Handle("/eve/v1/hostname", hostnameHandler)
+	metadataHandler := &metadataHandler{ctx: ctx}
+	mux.Handle("/latest/meta-data/", metadataHandler)
+	mux.Handle("/2009-04-04/meta-data/", metadataHandler)
+	openstackHandler := &openstackHandler{ctx: ctx}
+	mux.Handle("/openstack", openstackHandler)
+	mux.Handle("/openstack/", openstackHandler)
+	userDataHandler := &userDataHandler{ctx: ctx}
+	mux.Handle("/latest/user-data", userDataHandler)
+	mux.Handle("/2009-04-04/user-data", userDataHandler)
 
 	targetPort := 80
 	subnetStr := "169.254.169.254/32"
@@ -226,4 +252,239 @@ func (hdl hostnameHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		resp := []byte(anStatus.UUIDandVersion.UUID.String() + "\n")
 		w.Write(resp)
 	}
+}
+
+// ServeHTTP for metadataHandler process requests for ec2-compatible requests
+func (hdl metadataHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	log.Errorf("ServeHTTP metadataHandler %s", r.URL.Path)
+	dirname, filename := path.Split(strings.TrimSuffix(r.URL.Path, "/"))
+	dirname = strings.TrimSuffix(dirname, "/")
+	remoteIP := net.ParseIP(strings.Split(r.RemoteAddr, ":")[0])
+	var hostname string
+	var id string
+	anStatus := lookupAppNetworkStatusByAppIP(hdl.ctx, remoteIP)
+	if anStatus != nil {
+		hostname = anStatus.DisplayName
+		id = anStatus.UUIDandVersion.UUID.String()
+	} else {
+		log.Errorf("No AppNetworkStatus for %s",
+			remoteIP.String())
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+	switch filename {
+	case "meta-data":
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprintln(w, "instance-id")
+		fmt.Fprintln(w, "hostname")
+		fmt.Fprintln(w, "public-keys/")
+		return
+	case "hostname":
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprintln(w, hostname)
+		return
+	case "public-keys":
+		appConfig := lookupAppNetworkConfig(hdl.ctx, anStatus.Key())
+		if appConfig == nil {
+			log.Errorf("No AppNetworkConfig for %s",
+				anStatus.Key())
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		keys, err := getSSHPasswords(hdl.ctx, appConfig)
+		if err != nil {
+			log.Errorf("cannot get ssh passwords for %s: %v",
+				anStatus.Key(), err)
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		for ind := range keys {
+			fmt.Fprint(w, fmt.Sprintf("%d=key-%d", ind, ind))
+		}
+		return
+	case "openssh-key":
+		_, previousFile := path.Split(dirname)
+		keyIndex, err := strconv.Atoi(previousFile)
+		if err == nil {
+			//request for ssh key content
+			appConfig := lookupAppNetworkConfig(hdl.ctx, anStatus.Key())
+			if appConfig == nil {
+				log.Errorf("No AppNetworkConfig for %s",
+					anStatus.Key())
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+			keys, err := getSSHPasswords(hdl.ctx, appConfig)
+			if err != nil {
+				log.Errorf("cannot get ssh passwords for %s: %v",
+					anStatus.Key(), err)
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+			if keyIndex < len(keys) {
+				w.WriteHeader(http.StatusOK)
+				fmt.Fprintln(w, keys[keyIndex])
+				return
+			}
+		}
+	case "instance-id":
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprintln(w, id)
+		return
+	default:
+		if strings.Contains(r.URL.Path, "/public-keys/") {
+			keyIndex, err := strconv.Atoi(filename)
+			if err == nil {
+				//request for ssh key type
+				appConfig := lookupAppNetworkConfig(hdl.ctx, anStatus.Key())
+				if appConfig == nil {
+					log.Errorf("No AppNetworkConfig for %s",
+						anStatus.Key())
+					w.WriteHeader(http.StatusInternalServerError)
+					return
+				}
+				keys, err := getSSHPasswords(hdl.ctx, appConfig)
+				if err != nil {
+					log.Errorf("cannot get ssh passwords for %s",
+						anStatus.Key())
+					w.WriteHeader(http.StatusInternalServerError)
+					return
+				}
+				if keyIndex < len(keys) {
+					w.WriteHeader(http.StatusOK)
+					fmt.Fprint(w, "openssh-key")
+					return
+				}
+			}
+		}
+	}
+	w.WriteHeader(http.StatusNotFound)
+}
+
+// ServeHTTP for userDataHandler process requests for user-data
+func (hdl userDataHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	remoteIP := net.ParseIP(strings.Split(r.RemoteAddr, ":")[0])
+	anStatus := lookupAppNetworkStatusByAppIP(hdl.ctx, remoteIP)
+	if anStatus != nil {
+		appConfig := lookupAppNetworkConfig(hdl.ctx, anStatus.Key())
+		if appConfig == nil {
+			log.Errorf("No AppNetworkConfig for %s",
+				anStatus.Key())
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		userData, err := getCloudInitUserData(hdl.ctx, appConfig)
+		if err != nil {
+			log.Errorf("cannot get userData for %s: %v",
+				anStatus.Key(), err)
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		ud, err := base64.StdEncoding.DecodeString(userData)
+		if err != nil {
+			log.Errorf("cannot decode userData for %s: %v",
+				anStatus.Key(), err)
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		w.Header().Add("Content-Type", "application/octet-stream")
+		w.WriteHeader(http.StatusOK)
+		w.Write(ud)
+		return
+	}
+	w.WriteHeader(http.StatusNotFound)
+}
+
+// ServeHTTP for openstackHandler metadata service
+func (hdl openstackHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	dirname, filename := path.Split(strings.TrimSuffix(r.URL.Path, "/"))
+	dirname = strings.TrimSuffix(dirname, "/")
+	remoteIP := net.ParseIP(strings.Split(r.RemoteAddr, ":")[0])
+	anStatus := lookupAppNetworkStatusByAppIP(hdl.ctx, remoteIP)
+	var hostname string
+	var id string
+	if anStatus != nil {
+		hostname = anStatus.DisplayName
+		id = anStatus.UUIDandVersion.UUID.String()
+	} else {
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+	switch filename {
+	case "openstack":
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprintln(w, "latest")
+	case "meta_data.json":
+		appConfig := lookupAppNetworkConfig(hdl.ctx, anStatus.Key())
+		if appConfig == nil {
+			log.Errorf("No AppNetworkConfig for %s",
+				anStatus.Key())
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		keys, err := getSSHPasswords(hdl.ctx, appConfig)
+		if err != nil {
+			log.Errorf("cannot get ssh passwords for %s",
+				anStatus.Key())
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		var keysMap []map[string]string
+		publicKeys := make(map[string]string)
+		for ind, key := range keys {
+			keysMap = append(keysMap, map[string]string{
+				"data": fmt.Sprintf("%s\n", key),
+				"type": "ssh",
+				"name": fmt.Sprintf("key-%d", ind),
+			})
+			publicKeys[fmt.Sprintf("key-%d", ind)] = fmt.Sprintf("%s\n", key)
+		}
+		resp, _ := json.Marshal(map[string]interface{}{
+			"uuid":         id,
+			"hostname":     hostname,
+			"name":         hostname,
+			"launch_index": 0,
+			"keys":         keysMap,
+			"public_keys":  publicKeys,
+		})
+		w.WriteHeader(http.StatusOK)
+		w.Write(resp)
+	case "network_data.json":
+		resp, _ := json.Marshal(map[string]interface{}{
+			"services": []string{},
+			"networks": []string{},
+		})
+		w.WriteHeader(http.StatusOK)
+		w.Write(resp)
+	case "user_data":
+		appConfig := lookupAppNetworkConfig(hdl.ctx, anStatus.Key())
+		if appConfig == nil {
+			log.Errorf("No AppNetworkConfig for %s",
+				anStatus.Key())
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		userData, err := getCloudInitUserData(hdl.ctx, appConfig)
+		if err != nil {
+			log.Errorf("cannot get userData for %s: %v",
+				anStatus.Key(), err)
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		ud, err := base64.StdEncoding.DecodeString(userData)
+		if err != nil {
+			log.Errorf("cannot decode userData for %s: %v",
+				anStatus.Key(), err)
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		w.Header().Add("Content-Type", "text/yaml")
+		w.WriteHeader(http.StatusOK)
+		w.Write(ud)
+	case "vendor_data.json":
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("{}"))
+	}
+	w.WriteHeader(http.StatusNotFound)
 }

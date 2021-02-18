@@ -52,10 +52,12 @@ func MaybeAddAppNetworkConfig(ctx *zedmanagerContext,
 	}
 	if changed {
 		nc := types.AppNetworkConfig{
-			UUIDandVersion: aiConfig.UUIDandVersion,
-			DisplayName:    aiConfig.DisplayName,
-			Activate:       aiConfig.Activate,
-			GetStatsIPAddr: aiConfig.CollectStatsIPAddr,
+			UUIDandVersion:    aiConfig.UUIDandVersion,
+			DisplayName:       aiConfig.DisplayName,
+			Activate:          aiConfig.Activate,
+			GetStatsIPAddr:    aiConfig.CollectStatsIPAddr,
+			CloudInitUserData: aiConfig.CloudInitUserData,
+			CipherBlockStatus: aiConfig.CipherBlockStatus,
 		}
 		nc.UnderlayNetworkList = make([]types.UnderlayNetworkConfig,
 			len(aiConfig.UnderlayNetworkList))

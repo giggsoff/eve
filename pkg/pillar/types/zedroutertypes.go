@@ -26,6 +26,8 @@ type AppNetworkConfig struct {
 	Activate            bool
 	GetStatsIPAddr      net.IP
 	UnderlayNetworkList []UnderlayNetworkConfig
+	CloudInitUserData   *string
+	CipherBlockStatus   CipherBlockStatus
 }
 
 func (config AppNetworkConfig) Key() string {
