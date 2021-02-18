@@ -35,6 +35,11 @@ type hostnameHandler struct {
 	ctx *zedrouterContext
 }
 
+// Provides a metadata for cloud-init
+type metadataHandler struct {
+	ctx *zedrouterContext
+}
+
 func createServer4(ctx *zedrouterContext, bridgeIP string, bridgeName string) error {
 	mux := http.NewServeMux()
 	nh := &networkHandler{ctx: ctx}
@@ -43,6 +48,8 @@ func createServer4(ctx *zedrouterContext, bridgeIP string, bridgeName string) er
 	mux.Handle("/eve/v1/external_ipv4", ipHandler)
 	hostnameHandler := &hostnameHandler{ctx: ctx}
 	mux.Handle("/eve/v1/hostname", hostnameHandler)
+	metadataHandler := &metadataHandler{ctx: ctx}
+	mux.Handle("openstack/2017-02-22/meta_data.json", metadataHandler)
 
 	targetPort := 80
 	subnetStr := "169.254.169.254/32"
@@ -219,4 +226,20 @@ func (hdl hostnameHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		resp := []byte(anStatus.UUIDandVersion.UUID.String() + "\n")
 		w.Write(resp)
 	}
+}
+
+// ServeHTTP for metadataHandler returns json
+func (hdl metadataHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	remoteIP := net.ParseIP(strings.Split(r.RemoteAddr, ":")[0])
+	var hostname string
+	anStatus := lookupAppNetworkStatusByAppIP(hdl.ctx, remoteIP)
+	if anStatus != nil {
+		hostname = anStatus.UUIDandVersion.UUID.String()
+	}
+	w.Header().Add("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	resp, _ := json.Marshal(map[string]string{
+		"hostname": hostname,
+	})
+	w.Write(resp)
 }
