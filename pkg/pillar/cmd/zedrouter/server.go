@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"path"
 	"strconv"
 	"strings"
 
@@ -35,9 +36,59 @@ type hostnameHandler struct {
 	ctx *zedrouterContext
 }
 
-// Provides a metadata for cloud-init
+// Provides a meta-data for cloud-init
 type metadataHandler struct {
 	ctx *zedrouterContext
+}
+
+// Provides a user-data for cloud-init
+type userDataHandler struct {
+	ctx *zedrouterContext
+}
+
+// responseWriter is a minimal wrapper for http.ResponseWriter that allows the
+// written HTTP status code to be captured for logging.
+type responseWriter struct {
+	http.ResponseWriter
+	status      int
+	wroteHeader bool
+}
+
+func wrapResponseWriter(w http.ResponseWriter) *responseWriter {
+	return &responseWriter{ResponseWriter: w}
+}
+
+func (rw *responseWriter) Status() int {
+	return rw.status
+}
+
+func (rw *responseWriter) WriteHeader(code int) {
+	if rw.wroteHeader {
+		return
+	}
+
+	rw.status = code
+	rw.ResponseWriter.WriteHeader(code)
+	rw.wroteHeader = true
+
+	return
+}
+
+// LoggingMiddleware logs the incoming HTTP request & its duration.
+func LoggingMiddleware() func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		fn := func(w http.ResponseWriter, r *http.Request) {
+			defer func() {
+				if err := recover(); err != nil {
+					w.WriteHeader(http.StatusInternalServerError)
+				}
+			}()
+			wrapped := wrapResponseWriter(w)
+			next.ServeHTTP(wrapped, r)
+			log.Errorf("ServeHTTP LOGGER %s", r.URL.Path)
+		}
+		return http.HandlerFunc(fn)
+	}
 }
 
 func createServer4(ctx *zedrouterContext, bridgeIP string, bridgeName string) error {
@@ -49,7 +100,11 @@ func createServer4(ctx *zedrouterContext, bridgeIP string, bridgeName string) er
 	hostnameHandler := &hostnameHandler{ctx: ctx}
 	mux.Handle("/eve/v1/hostname", hostnameHandler)
 	metadataHandler := &metadataHandler{ctx: ctx}
-	mux.Handle("openstack/2017-02-22/meta_data.json", metadataHandler)
+	mux.Handle("/latest/meta-data/", metadataHandler)
+	mux.Handle("/2009-04-04/meta-data/", metadataHandler)
+	userDataHandler := &userDataHandler{ctx: ctx}
+	mux.Handle("/latest/user-data", userDataHandler)
+	mux.Handle("/2009-04-04/user-data", userDataHandler)
 
 	targetPort := 80
 	subnetStr := "169.254.169.254/32"
@@ -125,9 +180,10 @@ func runServer(mux http.Handler, network string, ipaddr string,
 
 	// XXX no to place to specify network. Might be an issue when we
 	// add IPv6?
+	m := LoggingMiddleware()
 	srv := http.Server{
 		Addr:    ipaddr + ":80",
-		Handler: mux,
+		Handler: m(mux),
 	}
 	idleConnsClosed := make(chan struct{})
 	go func() {
@@ -230,16 +286,62 @@ func (hdl hostnameHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // ServeHTTP for metadataHandler returns json
 func (hdl metadataHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	log.Errorf("ServeHTTP metadataHandler %s", r.URL.Path)
+	dirname, filename := path.Split(strings.TrimSuffix(r.URL.Path, "/"))
+	dirname = strings.TrimSuffix(dirname, "/")
 	remoteIP := net.ParseIP(strings.Split(r.RemoteAddr, ":")[0])
 	var hostname string
+	var id string
 	anStatus := lookupAppNetworkStatusByAppIP(hdl.ctx, remoteIP)
 	if anStatus != nil {
-		hostname = anStatus.UUIDandVersion.UUID.String()
+		hostname = anStatus.DisplayName
+		id = anStatus.UUIDandVersion.UUID.String()
+	} else {
+		w.WriteHeader(http.StatusNotFound)
+		return
 	}
-	w.Header().Add("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	resp, _ := json.Marshal(map[string]string{
-		"hostname": hostname,
-	})
+	switch filename {
+	case "meta-data":
+		fmt.Fprintln(w, "instance-id")
+		fmt.Fprintln(w, "hostname")
+		fmt.Fprintln(w, "public-keys/")
+	case "hostname":
+		fmt.Fprintln(w, hostname)
+	case "public-keys":
+		fmt.Fprint(w, "0=test")
+	case "0":
+		if _, previousFile := path.Split(dirname); previousFile == "public-keys" {
+			fmt.Fprint(w, "openssh-key")
+		}
+	case "openssh-key":
+		log.Errorf("openssh-key %s", dirname)
+		if _, previousFile := path.Split(dirname); previousFile == "0" {
+			_, err := fmt.Fprintln(w, "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQCwYIGaByqVI0M3qFHMvAs4s5aGkDKV6WfEzHuwc+7LlUpXom86qhT0RFVePHqCnTgi0UA7d92wumvol334M/bDrke/KRpkvXEmmOgUblOBM5jAXCpNyi0GjjgzFCwU0y1BIGEapr1W94GgOrbQc2VohmNVmFyvb9dh1oSOw9niWcYKH48Me0zzlqpNi3hMILUOlnBPVhbNI2HNK2V8jN6Zme+B66G7MlBT+isY0X55gTNdfwX/VngUGgeYXeWQdQe2rqQHPOnr8ms8O/7HMWGtdWJo26p67SCj9YFHv9F06WEduhhOLEzatpyHPoBrZD/+SVGz5xrKHbNjw35zJ2eXd8R4oZN5IMULEmIwpj3s6jBz8ZXAlkb3acXGdcCPF0fMFtsgGjAzOOF3TH/N5l81kvnyNOwWjg1Y63wBVLsDjujVUsJYDiriUPKE6JbZdAoXYJeWRm8j2i4Qox5cdA5ZBdywg9M+oFtuRtdIsq53He4AcTZttz+arZhgoP1mYO0=")
+			log.Errorf("openssh-key error %s", err)
+		}
+	case "instance-id":
+		fmt.Fprintln(w, id)
+	}
+	log.Errorf("ServeHTTP metadataHandler done %s", r.URL.Path)
+}
+
+// ServeHTTP for userDataHandler returns json
+func (hdl userDataHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	log.Errorf("ServeHTTP userDataHandler %s", r.URL.Path)
+	remoteIP := net.ParseIP(strings.Split(r.RemoteAddr, ":")[0])
+	anStatus := lookupAppNetworkStatusByAppIP(hdl.ctx, remoteIP)
+	if anStatus != nil {
+		appConfig := lookupAppNetworkConfig(hdl.ctx, anStatus.Key())
+		if appConfig != nil {
+			log.Errorf("ServeHTTP ERROR: %s", appConfig.UserData)
+		}
+	} else {
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+	w.Header().Add("Content-Type", "text/yaml")
+	resp := []byte("#cloud-config\npassword: passw0rd\nchpasswd: { expire: False }\nssh_pwauth: True\n")
+	w.WriteHeader(http.StatusOK)
 	w.Write(resp)
 }
