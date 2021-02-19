@@ -46,6 +46,11 @@ type userDataHandler struct {
 	ctx *zedrouterContext
 }
 
+// Provides links for OpenStack metadata
+type openstackHandler struct {
+	ctx *zedrouterContext
+}
+
 // responseWriter is a minimal wrapper for http.ResponseWriter that allows the
 // written HTTP status code to be captured for logging.
 type responseWriter struct {
@@ -102,6 +107,9 @@ func createServer4(ctx *zedrouterContext, bridgeIP string, bridgeName string) er
 	metadataHandler := &metadataHandler{ctx: ctx}
 	mux.Handle("/latest/meta-data/", metadataHandler)
 	mux.Handle("/2009-04-04/meta-data/", metadataHandler)
+	openstackHandler := &openstackHandler{ctx: ctx}
+	mux.Handle("/openstack", openstackHandler)
+	mux.Handle("/openstack/", openstackHandler)
 	userDataHandler := &userDataHandler{ctx: ctx}
 	mux.Handle("/latest/user-data", userDataHandler)
 	mux.Handle("/2009-04-04/user-data", userDataHandler)
@@ -318,7 +326,9 @@ func (hdl metadataHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		log.Errorf("openssh-key %s", dirname)
 		if _, previousFile := path.Split(dirname); previousFile == "0" {
 			_, err := fmt.Fprintln(w, "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQCwYIGaByqVI0M3qFHMvAs4s5aGkDKV6WfEzHuwc+7LlUpXom86qhT0RFVePHqCnTgi0UA7d92wumvol334M/bDrke/KRpkvXEmmOgUblOBM5jAXCpNyi0GjjgzFCwU0y1BIGEapr1W94GgOrbQc2VohmNVmFyvb9dh1oSOw9niWcYKH48Me0zzlqpNi3hMILUOlnBPVhbNI2HNK2V8jN6Zme+B66G7MlBT+isY0X55gTNdfwX/VngUGgeYXeWQdQe2rqQHPOnr8ms8O/7HMWGtdWJo26p67SCj9YFHv9F06WEduhhOLEzatpyHPoBrZD/+SVGz5xrKHbNjw35zJ2eXd8R4oZN5IMULEmIwpj3s6jBz8ZXAlkb3acXGdcCPF0fMFtsgGjAzOOF3TH/N5l81kvnyNOwWjg1Y63wBVLsDjujVUsJYDiriUPKE6JbZdAoXYJeWRm8j2i4Qox5cdA5ZBdywg9M+oFtuRtdIsq53He4AcTZttz+arZhgoP1mYO0=")
-			log.Errorf("openssh-key error %s", err)
+			if err != nil {
+				log.Errorf("openssh-key error %s", err)
+			}
 		}
 	case "instance-id":
 		fmt.Fprintln(w, id)
@@ -344,4 +354,61 @@ func (hdl userDataHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	resp := []byte("#cloud-config\npassword: passw0rd\nchpasswd: { expire: False }\nssh_pwauth: True\n")
 	w.WriteHeader(http.StatusOK)
 	w.Write(resp)
+}
+
+// ServeHTTP for openstackHandler
+func (hdl openstackHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	log.Errorf("ServeHTTP openstackHandler %s", r.URL.Path)
+	dirname, filename := path.Split(strings.TrimSuffix(r.URL.Path, "/"))
+	dirname = strings.TrimSuffix(dirname, "/")
+	remoteIP := net.ParseIP(strings.Split(r.RemoteAddr, ":")[0])
+	anStatus := lookupAppNetworkStatusByAppIP(hdl.ctx, remoteIP)
+	var hostname string
+	var id string
+	if anStatus != nil {
+		hostname = anStatus.DisplayName
+		id = anStatus.UUIDandVersion.UUID.String()
+		appConfig := lookupAppNetworkConfig(hdl.ctx, anStatus.Key())
+		if appConfig != nil {
+			log.Errorf("ServeHTTP ERROR: %s", appConfig.UserData)
+		}
+	} else {
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+	key := "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQCwYIGaByqVI0M3qFHMvAs4s5aGkDKV6WfEzHuwc+7LlUpXom86qhT0RFVePHqCnTgi0UA7d92wumvol334M/bDrke/KRpkvXEmmOgUblOBM5jAXCpNyi0GjjgzFCwU0y1BIGEapr1W94GgOrbQc2VohmNVmFyvb9dh1oSOw9niWcYKH48Me0zzlqpNi3hMILUOlnBPVhbNI2HNK2V8jN6Zme+B66G7MlBT+isY0X55gTNdfwX/VngUGgeYXeWQdQe2rqQHPOnr8ms8O/7HMWGtdWJo26p67SCj9YFHv9F06WEduhhOLEzatpyHPoBrZD/+SVGz5xrKHbNjw35zJ2eXd8R4oZN5IMULEmIwpj3s6jBz8ZXAlkb3acXGdcCPF0fMFtsgGjAzOOF3TH/N5l81kvnyNOwWjg1Y63wBVLsDjujVUsJYDiriUPKE6JbZdAoXYJeWRm8j2i4Qox5cdA5ZBdywg9M+oFtuRtdIsq53He4AcTZttz+arZhgoP1mYO0="
+	switch filename {
+	case "openstack":
+		fmt.Fprintln(w, "latest")
+	case "meta_data.json":
+		resp, _ := json.Marshal(map[string]interface{}{
+			"uuid":         id,
+			"hostname":     hostname,
+			"name":         hostname,
+			"launch_index": 0,
+			"keys": []map[string]string{
+				{
+					"data": fmt.Sprintf("%s\n", key),
+					"type": "ssh",
+					"name": "key",
+				},
+			},
+			"public_keys": map[string]string{
+				"key": fmt.Sprintf("%s\n", key),
+			},
+		})
+		w.Write(resp)
+	case "network_data.json":
+		resp, _ := json.Marshal(map[string]interface{}{
+			"services": []string{},
+			"networks": []string{},
+		})
+		w.Write(resp)
+	case "user-data":
+		resp := []byte("#cloud-config\npassword: passw0rd\nchpasswd: { expire: False }\nssh_pwauth: True\n")
+		w.Write(resp)
+	case "vendor_data.json":
+		w.Write([]byte("{}"))
+	}
 }
