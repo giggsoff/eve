@@ -1,16 +1,12 @@
 ---
 name: Eden
 on:
-  push:
-    branches: [master]
-  pull_request_review:
-    branches: [master]
-    types: [submitted]
+  pull_request:
+    branches: [ master ]
 
 jobs:
   integration:
     runs-on: ubuntu-20.04
-    if: ${{ github.event.review.state == 'approved' || github.ref == 'refs/heads/master' }}
     steps:
       - name: setup
         run: |
@@ -19,7 +15,8 @@ jobs:
       - name: get eden
         uses: actions/checkout@v2
         with:
-          repository: 'lf-edge/eden'
+          repository: 'itmo-eve/eden'
+          ref: 'info-and-console-artifacts'
       - name: build eden
         run: |
           make clean
@@ -49,14 +46,24 @@ jobs:
           ./eden config set default --key=eve.accel --value=false
           EDITOR=cat ./eden config edit default
           echo > tests/workflow/testdata/eden_stop.txt
-          ./eden test ./tests/workflow -v debug
+          ./eden setup
+          ./eden start
+          ./eden eve onboard
+          ./eden test tests/network -e network_test
       - name: Collect logs
         if: ${{ always() }}
         run: |
           ./eden log --format json > trace.log
+          ./eden info > info.log
+          cp dist/default-eve.log console.log
+          docker logs eden_adam > adam.log 2>&1
       - name: Store raw test results
         if: ${{ always() }}
         uses: actions/upload-artifact@v2
         with:
           name: 'eden-report'
-          path: ${{ github.workspace }}/trace.log
+          path: |
+            ${{ github.workspace }}/trace.log
+            ${{ github.workspace }}/info.log
+            ${{ github.workspace }}/console.log
+            ${{ github.workspace }}/adam.log
