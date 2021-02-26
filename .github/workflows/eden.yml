@@ -3,14 +3,12 @@ name: Eden
 on:
   push:
     branches: [master]
-  pull_request_review:
+  pull_request:
     branches: [master]
-    types: [submitted]
 
 jobs:
   integration:
     runs-on: ubuntu-20.04
-    if: ${{ github.event.review.state == 'approved' || github.ref == 'refs/heads/master' }}
     steps:
       - name: setup
         run: |
@@ -19,7 +17,8 @@ jobs:
       - name: get eden
         uses: actions/checkout@v2
         with:
-          repository: 'lf-edge/eden'
+          repository: 'itmo-eve/eden'
+          ref: 'tests-export'
       - name: build eden
         run: |
           make clean
@@ -47,9 +46,10 @@ jobs:
           ./eden config add default
           ./eden config set default --key eve.tag --value="$TAG"
           ./eden config set default --key=eve.accel --value=false
+          ./eden config set default --key=eden.tests --value=${{ github.workspace }}/eve/tests/eden
           EDITOR=cat ./eden config edit default
-          echo > tests/workflow/testdata/eden_stop.txt
-          ./eden test ./tests/workflow -v debug
+          echo > ${{ github.workspace }}/eve/tests/eden/workflow/testdata/eden_stop.txt
+          ./eden test ${{ github.workspace }}/eve/tests/eden/workflow -v debug
       - name: Collect logs
         if: ${{ always() }}
         run: |
