@@ -14,3 +14,5 @@
 ^.+go.mod
 ^.+go.sum
 ^.+/vendor/.+
+^tests/eden/escript/go-internal/internal/syscall/windows/.*
+^tests/eden/eclient/testdata/maridb\.txt
