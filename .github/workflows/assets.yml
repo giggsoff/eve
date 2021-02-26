@@ -42,7 +42,7 @@ jobs:
       - name: Pull the EVE release from DockerHUB or build it
         run: |
           HV=kvm
-          if [ "${{ github.event.repository.full_name }}" = "lf-edge/eve" ]; then
+          if [ "${{ github.event.repository.full_name }}" = "giggsoff/eve" ]; then
              EVE=lfedge/eve:${{ env.TAG }}-${HV}-${{ env.ARCH }}
              docker pull "$EVE"
           else
