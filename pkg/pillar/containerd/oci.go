@@ -24,6 +24,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -391,7 +392,6 @@ func (s *ociSpec) UpdateMounts(disks []types.DiskStatus) error {
 		mountDirs = []string{"/"}
 		id = 1
 	}
-
 	// Validating if there are enough disks provided for the mount-points
 	if len(disks)-id < len(s.volumes) {
 		// If no. of mount-points is (strictly) greater than no. of disks provided, we need to throw an error as there
@@ -399,7 +399,14 @@ func (s *ociSpec) UpdateMounts(disks []types.DiskStatus) error {
 		return fmt.Errorf("updateMounts: Number of volumes provided: %v is less than number of mount-points: %v",
 			len(disks), len(s.volumes))
 	} else {
-		for p := range s.volumes {
+		volumeKeys := make([]string, len(s.volumes))
+		ind := 0
+		for k, _ := range s.volumes {
+			volumeKeys[ind] = k
+			ind++
+		}
+		sort.Sort(sort.Reverse(sort.StringSlice(volumeKeys)))
+		for _, p := range volumeKeys {
 			// if the next non-root volume has a MountDir specifies it takes precedence over OCI Image spec
 			if disks[id].MountDir != "" && disks[id].MountDir != "/" {
 				mountDirs = append(mountDirs, disks[id].MountDir)
