@@ -248,6 +248,7 @@ func (hdl hostnameHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		log.Errorf("No AppNetworkStatus for %s",
 			remoteIP.String())
 	} else {
+		w.Header().Set("Content-Type", "text/plain")
 		w.WriteHeader(http.StatusOK)
 		resp := []byte(anStatus.UUIDandVersion.UUID.String() + "\n")
 		w.Write(resp)
@@ -269,17 +270,19 @@ func (hdl metadataHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	} else {
 		log.Errorf("No AppNetworkStatus for %s",
 			remoteIP.String())
-		w.WriteHeader(http.StatusNotFound)
+		w.WriteHeader(http.StatusServiceUnavailable)
 		return
 	}
 	switch filename {
 	case "meta-data":
+		w.Header().Set("Content-Type", "text/plain")
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprintln(w, "instance-id")
 		fmt.Fprintln(w, "hostname")
 		fmt.Fprintln(w, "public-keys/")
 		return
 	case "hostname":
+		w.Header().Set("Content-Type", "text/plain")
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprintln(w, hostname)
 		return
@@ -291,13 +294,14 @@ func (hdl metadataHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
-		keys, err := getSSHPasswords(hdl.ctx, appConfig)
+		keys, err := getSSHPublicKeys(hdl.ctx, appConfig)
 		if err != nil {
 			log.Errorf("cannot get ssh passwords for %s: %v",
 				anStatus.Key(), err)
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
+		w.Header().Set("Content-Type", "text/plain")
 		w.WriteHeader(http.StatusOK)
 		for ind := range keys {
 			fmt.Fprint(w, fmt.Sprintf("%d=key-%d", ind, ind))
@@ -315,7 +319,7 @@ func (hdl metadataHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(http.StatusInternalServerError)
 				return
 			}
-			keys, err := getSSHPasswords(hdl.ctx, appConfig)
+			keys, err := getSSHPublicKeys(hdl.ctx, appConfig)
 			if err != nil {
 				log.Errorf("cannot get ssh passwords for %s: %v",
 					anStatus.Key(), err)
@@ -323,12 +327,14 @@ func (hdl metadataHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			if keyIndex < len(keys) {
+				w.Header().Set("Content-Type", "text/plain")
 				w.WriteHeader(http.StatusOK)
 				fmt.Fprintln(w, keys[keyIndex])
 				return
 			}
 		}
 	case "instance-id":
+		w.Header().Set("Content-Type", "text/plain")
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprintln(w, id)
 		return
@@ -344,7 +350,7 @@ func (hdl metadataHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					w.WriteHeader(http.StatusInternalServerError)
 					return
 				}
-				keys, err := getSSHPasswords(hdl.ctx, appConfig)
+				keys, err := getSSHPublicKeys(hdl.ctx, appConfig)
 				if err != nil {
 					log.Errorf("cannot get ssh passwords for %s",
 						anStatus.Key())
@@ -352,6 +358,7 @@ func (hdl metadataHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					return
 				}
 				if keyIndex < len(keys) {
+					w.Header().Set("Content-Type", "text/plain")
 					w.WriteHeader(http.StatusOK)
 					fmt.Fprint(w, "openssh-key")
 					return
@@ -371,7 +378,7 @@ func (hdl userDataHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if appConfig == nil {
 			log.Errorf("No AppNetworkConfig for %s",
 				anStatus.Key())
-			w.WriteHeader(http.StatusInternalServerError)
+			w.WriteHeader(http.StatusServiceUnavailable)
 			return
 		}
 		userData, err := getCloudInitUserData(hdl.ctx, appConfig)
@@ -408,11 +415,12 @@ func (hdl openstackHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		hostname = anStatus.DisplayName
 		id = anStatus.UUIDandVersion.UUID.String()
 	} else {
-		w.WriteHeader(http.StatusNotFound)
+		w.WriteHeader(http.StatusServiceUnavailable)
 		return
 	}
 	switch filename {
 	case "openstack":
+		w.Header().Set("Content-Type", "text/plain")
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprintln(w, "latest")
 	case "meta_data.json":
@@ -423,7 +431,7 @@ func (hdl openstackHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
-		keys, err := getSSHPasswords(hdl.ctx, appConfig)
+		keys, err := getSSHPublicKeys(hdl.ctx, appConfig)
 		if err != nil {
 			log.Errorf("cannot get ssh passwords for %s",
 				anStatus.Key())
@@ -448,6 +456,7 @@ func (hdl openstackHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			"keys":         keysMap,
 			"public_keys":  publicKeys,
 		})
+		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		w.Write(resp)
 	case "network_data.json":
@@ -455,6 +464,7 @@ func (hdl openstackHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			"services": []string{},
 			"networks": []string{},
 		})
+		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		w.Write(resp)
 	case "user_data":
@@ -479,10 +489,11 @@ func (hdl openstackHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
-		w.Header().Add("Content-Type", "text/yaml")
+		w.Header().Set("Content-Type", "text/yaml")
 		w.WriteHeader(http.StatusOK)
 		w.Write(ud)
 	case "vendor_data.json":
+		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("{}"))
 	}

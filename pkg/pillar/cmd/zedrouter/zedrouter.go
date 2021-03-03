@@ -307,7 +307,14 @@ func Run(ps *pubsub.PubSub, loggerArg *logrus.Logger, logArg *base.LogObject) in
 		log.Fatal(err)
 	}
 	zedrouterCtx.pubCipherBlockStatus = pubCipherBlockStatus
-	pubCipherBlockStatus.ClearRestarted()
+
+	cipherMetricsPub, err := ps.NewPublication(pubsub.PublicationOptions{
+		AgentName: agentName,
+		TopicType: types.CipherMetricsMap{},
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	// Look for controller certs which will be used for decryption
 	subControllerCert, err := ps.NewSubscription(pubsub.SubscriptionOptions{
@@ -565,6 +572,10 @@ func Run(ps *pubsub.PubSub, loggerArg *logrus.Logger, logArg *base.LogObject) in
 			// XXX can we trigger it as part of boot? Or watch file?
 			// XXX add file watch...
 			checkAndPublishDhcpLeases(&zedrouterCtx)
+			err = cipherMetricsPub.Publish("global", cipher.GetCipherMetrics())
+			if err != nil {
+				log.Errorln(err)
+			}
 			ps.CheckMaxTimeTopic(agentName, "PublishDhcpLeases", start,
 				warningTime, errorTime)
 
@@ -2170,8 +2181,8 @@ func addAppInstanceOverlayRoute(
 	}
 }
 
-// getSSHPasswords : returns decrypted SSH passwords
-func getSSHPasswords(ctx *zedrouterContext,
+// getSSHPublicKeys : returns decrypted SSH public keys
+func getSSHPublicKeys(ctx *zedrouterContext,
 	dc *types.AppNetworkConfig) ([]string, error) {
 	// TBD: add ssh keys into cypher block
 	return nil, nil
