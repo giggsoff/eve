@@ -750,16 +750,23 @@ func TestUpdateMounts(t *testing.T) {
 		{MountDir: "/override", Format: zconfig.Format_QCOW2, FileLocation: "/foo/bam.qcow2", ReadOnly: true},
 	}
 
+	correctMountDirs := []types.DiskStatus{
+		{MountDir: "/", Format: zconfig.Format_CONTAINER, FileLocation: "/foo/bar"},
+		{MountDir: "/hisvol", Format: zconfig.Format_CONTAINER, FileLocation: "/foo/baz"},
+		{MountDir: "/myvol", Format: zconfig.Format_QCOW2, FileLocation: "/foo/bam.qcow2", ReadOnly: true},
+	}
+
 	g.Expect(spec.UpdateMounts([]types.DiskStatus{})).To(HaveOccurred())
 	g.Expect(spec.UpdateMounts([]types.DiskStatus{{MountDir: "/", Format: zconfig.Format_CONTAINER}})).To(HaveOccurred())
 
-	g.Expect(spec.UpdateMounts(tresAmigos)).ToNot(HaveOccurred())
+	g.Expect(spec.UpdateMounts(tresAmigos)).To(HaveOccurred())
+	g.Expect(spec.UpdateMounts(correctMountDirs)).ToNot(HaveOccurred())
 	g.Expect(spec.Mounts).To(ConsistOf([]specs.Mount{
 		{Destination: "/test", Source: "/test", Type: "bind", Options: []string{"ro"}},
 		{Destination: "/dev/eve/volumes/by-id/1", Type: "bind", Source: "/foo/baz/rootfs", Options: []string{"rbind", "rw"}},
-		{Destination: "/myvol", Type: "bind", Source: "/foo/baz/rootfs", Options: []string{"rbind", "rw"}},
+		{Destination: "/hisvol", Type: "bind", Source: "/foo/baz/rootfs", Options: []string{"rbind", "rw"}},
 		{Destination: "/dev/eve/volumes/by-id/2", Type: "bind", Source: "/foo/bam.qcow2", Options: []string{"rbind", "ro"}},
-		{Destination: "/override/2", Type: "bind", Source: "/foo/bam.qcow2", Options: []string{"rbind", "ro"}},
+		{Destination: "/myvol/2", Type: "bind", Source: "/foo/bam.qcow2", Options: []string{"rbind", "ro"}},
 	}))
 	g.Expect(spec.Annotations).To(Equal(map[string]string{eveOCIMountPointsLabel: "/override\n"}))
 
