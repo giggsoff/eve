@@ -268,19 +268,16 @@ func maybeNameHasSha(name string) string {
 	return ""
 }
 
-//checkAndUpdateResolveConfig fires modify handler for ResolveConfig
+//checkAndUpdateResolveStatus fires modify handler for ResolveStatus
 //we need to call it in case of no DatastoreConfig found
-func checkAndUpdateResolveConfig(ctx *downloaderContext, dsID uuid.UUID) {
-	log.Functionf("checkAndUpdateResolveConfig for %s", dsID)
+func checkAndUpdateResolveStatus(ctx *downloaderContext, dsID uuid.UUID) {
+	log.Functionf("checkAndUpdateResolveStatus for %s", dsID)
 	resolveStatuses := ctx.pubResolveStatus.GetAll()
 	for _, v := range resolveStatuses {
 		status := v.(types.ResolveStatus)
-		if status.DatastoreID == dsID {
-			config := lookupDownloaderConfig(ctx, status.Key())
-			if config != nil {
-				resHandler.modify(ctx, status.Key(), *config, *config)
-			}
+		if status.DatastoreID == dsID && status.HasError() {
+			resHandler.modify(ctx, status.Key(), v, v)
 		}
 	}
-	log.Functionf("checkAndUpdateResolveConfig for %s, done", dsID)
+	log.Functionf("checkAndUpdateResolveStatus for %s, done", dsID)
 }

@@ -24,7 +24,7 @@ func handleDatastoreConfigImpl(ctxArg interface{}, key string,
 	config := configArg.(types.DatastoreConfig)
 	log.Functionf("handleDatastoreConfigImpl for %s", key)
 	checkAndUpdateDownloadableObjects(ctx, config.UUID)
-	checkAndUpdateResolveConfig(ctx, config.UUID)
+	checkAndUpdateResolveStatus(ctx, config.UUID)
 	log.Functionf("handleDatastoreConfigImpl for %s, done", key)
 }
 
